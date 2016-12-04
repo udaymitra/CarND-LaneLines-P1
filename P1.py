@@ -139,13 +139,6 @@ def fit_line_from_segments(segments):
         for x1, y1, x2, y2 in line:
             points.append([x1, y1])
             points.append([x2, y2])
-
-            # slope = (y2 - y1) / (x2 - x1)
-            # b = y2 - (slope * x2)
-            # for x in range(x1, x2, 5):
-            #     y = slope * x + b
-            #     points.append([x, y])
-
     return fit_line(points)
 
 def filter_lane_segments_and_split(lines, image_shape):
@@ -217,21 +210,39 @@ def get_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
     return lines
 
 
-def draw_line_image_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
+def get_filtered_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
     lines = get_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap)
-    filtered_lines = filter_lane_segments_and_split(lines, img.shape)
-    # merged_lane_lines = extrapolate_lane_segments_and_merge(filtered_lines[0], filtered_lines[1], img.shape)
-    all_filtered_lines = filtered_lines[0] + filtered_lines[1]
-    line_img = np.zeros((*img.shape, 3), dtype=np.uint8)
-    draw_lines(line_img, all_filtered_lines, thickness=5)
-    return line_img
+    return filter_lane_segments_and_split(lines, img.shape)
 
-def get_lanes(img, mask_function):
+def apply_white_yellow_hsv_mask(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # define range of white color in HSV
+    lower_white = np.array([0, 0, 220])
+    # lower_white = np.array([0, 0, 80])
+    upper_white = np.array([130, 130, 255])
+    # Threshold the HSV image to get only white colors
+    mask_white = cv2.inRange(hsv, lower_white, upper_white)
+
+    # define range of yellow color in HSV
+    lower_yellow = np.array([20, 80, 200])
+    upper_yellow = np.array([120, 200, 255])
+    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    # this didn't work out well
+    # define range of white color in shadow in HSV
+    lower_white_shadow = np.array([80, 0, 80])
+    upper_white_shadow = np.array([180, 50, 200])
+    mask_white_shadow = cv2.inRange(hsv, lower_white_shadow, upper_white_shadow)
+
+    mask = mask_yellow | mask_white
+
+    # Bitwise-AND mask and original image
+    return cv2.bitwise_and(image, image, mask=mask)
+
+def identify_lane_segments_filter_by_slope_and_split(img, convert_to_hsv_or_gray_scale_function):
     # convert to gray scale
-    gray = grayscale(img)
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-    # plt.imshow(gray, cmap='hsv')
-    # plt.show()
+    gray = convert_to_hsv_or_gray_scale_function(img)
 
     # canny edge detection
     # blur image
@@ -241,20 +252,31 @@ def get_lanes(img, mask_function):
     lines_in_img = canny(blurred_gray, 50, 150)
 
     # compute region mask
-    mask_vertices = mask_function(lines_in_img.shape)
+    mask_vertices = get_polygon_mask(lines_in_img.shape)
 
     # apply mask
     lines_in_roi = region_of_interest(lines_in_img, mask_vertices)
 
     # hough transform
-    rho = 2
-    theta = np.pi/180
-    threshold = 30
+    rho = 1
+    theta = np.pi / 180
+    threshold = 15
     min_line_length = 10
     max_line_gap = 5
-    lane_lines = draw_line_image_hough_lines(lines_in_roi, rho, theta, threshold, min_line_length, max_line_gap)
+    return get_filtered_hough_lines(lines_in_roi, rho, theta, threshold, min_line_length, max_line_gap)
 
-    return lane_lines
+
+def get_lanes(img):
+    lane_segments = identify_lane_segments_filter_by_slope_and_split(img, apply_white_yellow_hsv_mask)
+    if (not lane_segments[0]) or (not lane_segments[1]):
+        # if either left or right segments are empty
+        lane_segments = identify_lane_segments_filter_by_slope_and_split(img, grayscale)
+
+    merged_lane_lines = extrapolate_lane_segments_and_merge(lane_segments[0], lane_segments[1], img.shape)
+    all_filtered_lines = lane_segments[0] + lane_segments[1]
+    line_img = np.zeros((*img[:,:,0].shape, 3), dtype=np.uint8)
+    draw_lines(line_img, merged_lane_lines, thickness=5)
+    return line_img
 
 # Import everything needed to edit/save/watch video clips
 from moviepy.editor import VideoFileClip
@@ -264,19 +286,24 @@ def process_image(image):
     # NOTE: The output you return should be a color image (3 channel) for processing video below
     # TODO: put your pipeline here,
     # you should return the final output (image with lines are drawn on lanes)
-    lane_lines = get_lanes(image, get_polygon_mask)
+    lane_lines = get_lanes(image)
     img_with_lanes = weighted_img(lane_lines, image)
     return img_with_lanes
 
-# white_output = 'white.mp4'
-# clip1 = VideoFileClip("solidWhiteRight.mp4")
-# white_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
-# white_clip.write_videofile(white_output, audio=False)
-#
-# yellow_output = 'yellow.mp4'
-# clip2 = VideoFileClip('solidYellowLeft.mp4')
-# yellow_clip = clip2.fl_image(process_image)
-# yellow_clip.write_videofile(yellow_output, audio=False)
+white_output = 'white.mp4'
+clip1 = VideoFileClip("solidWhiteRight.mp4")
+white_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
+white_clip.write_videofile(white_output, audio=False)
+
+yellow_output = 'yellow.mp4'
+clip2 = VideoFileClip('solidYellowLeft.mp4')
+yellow_clip = clip2.fl_image(process_image)
+yellow_clip.write_videofile(yellow_output, audio=False)
+
+challenge_output = 'extra.mp4'
+clip2 = VideoFileClip('challenge.mp4')
+challenge_clip = clip2.fl_image(process_image)
+challenge_clip.write_videofile(challenge_output, audio=False)
 
 # import os
 # for f in os.listdir("challenge_debug/frames/"):
@@ -284,32 +311,8 @@ def process_image(image):
 #     img_with_lanes = process_image(img)
 #     write_image_to_path(img_with_lanes, "challenge_debug/output/" + f)
 
-# challenge_output = 'extra.mp4'
-# clip2 = VideoFileClip('challenge.mp4')
-# challenge_clip = clip2.fl_image(process_image)
-# challenge_clip.write_videofile(challenge_output, audio=False)
 
-def apply_white_yellow_hsv_mask(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    # define range of white color in HSV
-    lower_white = np.array([0, 0, 220])
-    upper_white = np.array([130, 130, 255])
-    # Threshold the HSV image to get only white colors
-    mask_white = cv2.inRange(hsv, lower_white, upper_white)
-
-    # define range of yellow color in HSV
-    lower_yellow = np.array([20, 80, 200])
-    upper_yellow = np.array([120, 200, 255])
-    # Threshold the HSV image to get only yellow colors
-    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-
-    mask = mask_yellow | mask_white
-
-    # Bitwise-AND mask and original image
-    return cv2.bitwise_and(image, one_frame, mask=mask)
-
-one_frame = read_image_from_path("challenge_debug/frames/output_0041.jpg")
-masked_frame = apply_white_yellow_hsv_mask(one_frame)
-plt.imshow(masked_frame)
-plt.show()
+# one_frame = read_image_from_path("challenge_debug/frames/output_0176.jpg")
+# masked_frame = apply_white_yellow_hsv_mask(one_frame)
+# plt.imshow(process_image(one_frame))
+# plt.show()
