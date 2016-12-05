@@ -174,6 +174,12 @@ def apply_white_yellow_hsv_mask(image):
     # Bitwise-AND mask and original image
     return cv2.bitwise_and(image, image, mask=mask)
 
+def gray_and_normalize_hist(img):
+    # tried equalizing histogram over gray image for challenge
+    # this gave worse results than color mask
+    gray = grayscale(img)
+    return cv2.equalizeHist(gray)
+
 ### split segments to left and right lanes
 ### filter bad segments
 def filter_lane_segments_and_split(lines, image_shape):
@@ -320,9 +326,15 @@ challenge_clip.write_videofile(challenge_output, audio=False)
 #     img = read_image_from_path("challenge_debug/frames/" + f)
 #     img_with_lanes = process_image(img)
 #     write_image_to_path(img_with_lanes, "challenge_debug/output/" + f)
-
-
+#
+#
 # one_frame = read_image_from_path("challenge_debug/frames/output_0176.jpg")
-# masked_frame = apply_white_yellow_hsv_mask(one_frame)
-# plt.imshow(process_image(one_frame))
+# # masked_frame = apply_white_yellow_hsv_mask(one_frame)
+# gray = grayscale(one_frame)
+# plt.figure(1)
+# plt.imshow(gray, cmap='gray')
+#
+# eqim = cv2.equalizeHist(gray)
+# plt.figure(2)
+# plt.imshow(eqim, cmap='gray')
 # plt.show()
