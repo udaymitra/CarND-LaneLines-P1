@@ -99,32 +99,29 @@ def weighted_img(img, initial_img, α=0.8, β=1., λ=0.):
     """
     return cv2.addWeighted(initial_img, α, img, β, λ)
 
-### My code
+### My code starts here
 
+### helper wrappers around cv2 methods
 def read_image_from_path(img_file_path):
     return mpimg.imread(img_file_path)
 
 def write_image_to_path(img, target_file_path):
     mpimg.imsave(target_file_path, img)
 
-def get_polygon_mask(shape):
-    maxY, maxX = shape
-    leftBottom = (int(0.1 * maxX), maxY)
-    leftTop = (int(0.45 * maxX), int(0.6 * maxY))
-    rightTop = (int(0.55 * maxX), int(0.6 * maxY))
-    rightBottom = (int(0.9 * maxX), maxY)
+def get_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
+    """
+    `img` should be the output of a Canny transform.
 
-    # leftBottom = (0, 539)
-    # leftTop =
-    return np.array([[leftBottom, leftTop, rightTop, rightBottom]], dtype=np.int32)
+    Returns detected hough lines
+    """
+    return cv2.HoughLinesP(img, rho, theta, threshold, np.array([]), minLineLength=min_line_len,
+                            maxLineGap=max_line_gap)
 
-
+### Code to fit a line using segments
 from scipy.optimize import curve_fit
-
 
 def linear_fit_func(x, m, b):
     return m * x + b
-
 
 def fit_line(points):
     x = [p[0] for p in points]
@@ -141,6 +138,44 @@ def fit_line_from_segments(segments):
             points.append([x2, y2])
     return fit_line(points)
 
+### computing mask to apply to image
+def get_polygon_mask(shape):
+    maxY, maxX = shape
+    leftBottom = (int(0.1 * maxX), maxY)
+    leftTop = (int(0.45 * maxX), int(0.6 * maxY))
+    rightTop = (int(0.55 * maxX), int(0.6 * maxY))
+    rightBottom = (int(0.9 * maxX), maxY)
+    return np.array([[leftBottom, leftTop, rightTop, rightBottom]], dtype=np.int32)
+
+### color mask to extract white and yellow lines from image
+def apply_white_yellow_hsv_mask(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # define range of white color in HSV
+    lower_white = np.array([0, 0, 220])
+    # lower_white = np.array([0, 0, 80])
+    upper_white = np.array([130, 130, 255])
+    # Threshold the HSV image to get only white colors
+    mask_white = cv2.inRange(hsv, lower_white, upper_white)
+
+    # define range of yellow color in HSV
+    lower_yellow = np.array([20, 80, 200])
+    upper_yellow = np.array([120, 200, 255])
+    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    # this didn't work out well
+    # define range of white color in shadow in HSV
+    lower_white_shadow = np.array([80, 0, 80])
+    upper_white_shadow = np.array([180, 50, 200])
+    mask_white_shadow = cv2.inRange(hsv, lower_white_shadow, upper_white_shadow)
+
+    mask = mask_yellow | mask_white
+
+    # Bitwise-AND mask and original image
+    return cv2.bitwise_and(image, image, mask=mask)
+
+### split segments to left and right lanes
+### filter bad segments
 def filter_lane_segments_and_split(lines, image_shape):
     """
     This method takes in hough lines identified using cvs.HoughLinesP method
@@ -198,47 +233,9 @@ def extrapolate_lane_segments_and_merge(left_lane_lines, right_lane_lines, shape
 
     return out_lines
 
-
-def get_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
-    """
-    `img` should be the output of a Canny transform.
-
-    Returns an image with hough lines drawn.
-    """
-    lines = cv2.HoughLinesP(img, rho, theta, threshold, np.array([]), minLineLength=min_line_len,
-                            maxLineGap=max_line_gap)
-    return lines
-
-
 def get_filtered_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
     lines = get_hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap)
     return filter_lane_segments_and_split(lines, img.shape)
-
-def apply_white_yellow_hsv_mask(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    # define range of white color in HSV
-    lower_white = np.array([0, 0, 220])
-    # lower_white = np.array([0, 0, 80])
-    upper_white = np.array([130, 130, 255])
-    # Threshold the HSV image to get only white colors
-    mask_white = cv2.inRange(hsv, lower_white, upper_white)
-
-    # define range of yellow color in HSV
-    lower_yellow = np.array([20, 80, 200])
-    upper_yellow = np.array([120, 200, 255])
-    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-
-    # this didn't work out well
-    # define range of white color in shadow in HSV
-    lower_white_shadow = np.array([80, 0, 80])
-    upper_white_shadow = np.array([180, 50, 200])
-    mask_white_shadow = cv2.inRange(hsv, lower_white_shadow, upper_white_shadow)
-
-    mask = mask_yellow | mask_white
-
-    # Bitwise-AND mask and original image
-    return cv2.bitwise_and(image, image, mask=mask)
 
 def identify_lane_segments_filter_by_slope_and_split(img, convert_to_hsv_or_gray_scale_function):
     # convert to gray scale
@@ -263,18 +260,30 @@ def identify_lane_segments_filter_by_slope_and_split(img, convert_to_hsv_or_gray
     threshold = 15
     min_line_length = 10
     max_line_gap = 5
-    return get_filtered_hough_lines(lines_in_roi, rho, theta, threshold, min_line_length, max_line_gap)
+    lines_segments = get_hough_lines(lines_in_roi, rho, theta, threshold, min_line_length, max_line_gap)
 
+    # filter lane segments and split into left, right lane segments
+    return filter_lane_segments_and_split(lines_segments, img.shape)
 
+### main function to compute lanes
 def get_lanes(img):
+    """
+    1. Use color mask first to identify lane segments.
+    2. If that doesnt return left and right lane segments like expected, use gray scale transformation
+    and extract left, right lane segments
+    3. extrapolate [left, right] lane segments and build lane geometry
+    """
     lane_segments = identify_lane_segments_filter_by_slope_and_split(img, apply_white_yellow_hsv_mask)
     if (not lane_segments[0]) or (not lane_segments[1]):
         # if either left or right segments are empty
         lane_segments = identify_lane_segments_filter_by_slope_and_split(img, grayscale)
 
     merged_lane_lines = extrapolate_lane_segments_and_merge(lane_segments[0], lane_segments[1], img.shape)
-    all_filtered_lines = lane_segments[0] + lane_segments[1]
-    line_img = np.zeros((*img[:,:,0].shape, 3), dtype=np.uint8)
+    return merged_lane_lines
+
+###  draw lane geometry layer as an image and return that
+def generate_lane_lines_image(img, merged_lane_lines):
+    line_img = np.zeros((*img[:, :, 0].shape, 3), dtype=np.uint8)
     draw_lines(line_img, merged_lane_lines, thickness=5)
     return line_img
 
@@ -286,8 +295,9 @@ def process_image(image):
     # NOTE: The output you return should be a color image (3 channel) for processing video below
     # TODO: put your pipeline here,
     # you should return the final output (image with lines are drawn on lanes)
-    lane_lines = get_lanes(image)
-    img_with_lanes = weighted_img(lane_lines, image)
+    merged_lane_lines = get_lanes(image)
+    lane_lines_layer = generate_lane_lines_image(image, merged_lane_lines)
+    img_with_lanes = weighted_img(lane_lines_layer, image)
     return img_with_lanes
 
 white_output = 'white.mp4'
